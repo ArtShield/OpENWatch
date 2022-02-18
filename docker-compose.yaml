@@ -1,0 +1,6 @@
+version: '3.3'
+services:
+  geth:
+    build: 'geth/'
+    ports:
+      - '8545:8545'
