@@ -1,6 +1,12 @@
 version: '3.3'
+
 services:
   geth:
     build: 'geth/'
+    volumes:
+      - openwatch_ethereum_persist:/ethereum:rw
     ports:
       - '8545:8545'
+
+volumes:
+  openwatch_ethereum_persist:
