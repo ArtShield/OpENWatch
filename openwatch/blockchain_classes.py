@@ -23,7 +23,12 @@ class Transaction:
     """
     A transaction in a block in the ethereum blockchain.
     """
-    ...
+    parent_block_number: str
+    parent_block_hash: str
+    from_: str
+    to: str
+    hash: str
+    input_: str
 
 
 @dataclass
