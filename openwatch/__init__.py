@@ -17,16 +17,17 @@
 from functools import lru_cache
 from typing import Any, Callable
 from uuid import uuid4
+import logging
 
 from requests import post
 
 from .blockchain_classes import Block, Transaction, NFT
 from .ethereum_utility import decode_return_value, decode_uint256_integer
-from .ethereum_exceptions import InvalidMintTransactionException
+from .ethereum_exceptions import InvalidMintTransactionException, TransactionCouldNotFetch, CouldNotFetchNFTURL
 
 
 class EthereumNFTWatcher:
-    def __init__(self, host: str, port: str) -> None:
+    def __init__(self, host: str, port: str, log_level: int) -> None:
         """
         Initialise an NFT tracker.
 
@@ -34,6 +35,9 @@ class EthereumNFTWatcher:
         :param port: Port of the server.
         """
         self.address = f'{host}:{port}'
+        logging.basicConfig()
+        self.logger = logging.getLogger('OpENWatchLogger')
+        self.logger.setLevel(log_level)
 
     def _send_json_rpc(self, method_name: str, params: list[Any]) -> Any:
         """
@@ -78,7 +82,7 @@ class EthereumNFTWatcher:
                      block_data['parentHash'],
                      block_data['transactions'])
 
-    def _fetch_transaction(self, transaction_id: str) -> Transaction:
+    def _fetch_transaction(self, transaction_hash: str) -> Transaction:
         """
         Return a transaction given its ID.
 
@@ -88,16 +92,19 @@ class EthereumNFTWatcher:
         :return the Transaction.
         """
         transaction_data = self._send_json_rpc(
-            'eth_getTransactionByHash', [transaction_id]
+            'eth_getTransactionByHash', [transaction_hash]
         )
-        return Transaction(
-            transaction_data['blockNumber'],
-            transaction_data['blockHash'],
-            transaction_data['from'],
-            transaction_data['to'],
-            transaction_data['hash'],
-            transaction_data['input']
-        )
+        try:
+            return Transaction(
+                transaction_data['blockNumber'],
+                transaction_data['blockHash'],
+                transaction_data['from'],
+                transaction_data['to'],
+                transaction_data['hash'],
+                transaction_data['input']
+            )
+        except TypeError:
+            raise TransactionCouldNotFetch(transaction_hash)
 
     def _fetch_nft_id_from_transaction(self, transaction_hash: str) -> int:
         """
@@ -107,8 +114,10 @@ class EthereumNFTWatcher:
             'eth_getTransactionReceipt', [transaction_hash]
         )
         try:
-            return decode_uint256_integer(receipt['logs']['topics'][3])
-        except (KeyError, TypeError):
+            return decode_uint256_integer(receipt['logs'][0]['topics'][3])
+        except (KeyError, TypeError, IndexError):
+            self.logger.debug(
+                f'Transaction {transaction_hash} is a non-mint transaction on a NFT.')
             raise InvalidMintTransactionException(transaction_hash)
 
     def _fetch_nft_url(self, smart_contract_address: str, nft_id: int) -> str:
@@ -121,17 +130,24 @@ class EthereumNFTWatcher:
         """
         # We are calling the tokenURI(uint256 tokenID) function of the smart
         # contract in the locationNFT
-        token_uri_raw = self._send_json_rpc(
-            'eth_call',
-            [
-                {
-                    'to': smart_contract_address,
-                    'data': f'0xc87b56dd{nft_id.to_bytes(256, "big").hex()}'
-                },
-                'latest'
-            ]
-        )
-        return decode_return_value(token_uri_raw)
+        try:
+            token_uri_raw = self._send_json_rpc(
+                'eth_call',
+                [
+                    {
+                        'to': smart_contract_address,
+                        'data': f'0xc87b56dd{nft_id.to_bytes(256, "big").hex()}'
+                    },
+                    'latest'
+                ]
+            )
+            return decode_return_value(token_uri_raw)
+        except KeyError:
+            self.logger.error(
+                'Could not fetch URL of NFT with ID %s in %s',
+                nft_id,
+                smart_contract_address)
+            raise CouldNotFetchNFTURL
 
     def _fetch_code_at_memory_address(self, contract_address: str) -> str:
         """
@@ -154,7 +170,11 @@ class EthereumNFTWatcher:
         # With the hash 0xc87b56dd, which is the Keccak-256 hash
         # of the tokenURI method, because that's how Ethereum blockchain
         # decided to work, apperantly.
-        return 'c87b56dd' in self._fetch_code_at_memory_address(contract_address)
+        if 'c87b56dd' in self._fetch_code_at_memory_address(contract_address):
+            self.logger.info(
+                f'Found {contract_address} to be a ERC-721 Compliant Smart Contract')
+            return True
+        return False
 
     def fetch_nfts_until_block(self, terminal_block_hash: str = f'0x{"0" * 64}', limit: int = -1, callback: Callable[[NFT], None] = None) -> list[NFT]:
         """
@@ -174,22 +194,34 @@ class EthereumNFTWatcher:
         block_count = 0
         last_block_hash = self._latest_block.block_hash
         prev_block_hash = last_block_hash
-        while prev_block_hash != terminal_block_hash and block_count <= limit:
+        while prev_block_hash != terminal_block_hash and (block_count <= limit or limit == -1):
+            self.logger.debug('Fetching block with hash %s', prev_block_hash)
             last_block = self._fetch_block(prev_block_hash)
-            for transaction_id in last_block.transaction_ids:
-                transaction = self._fetch_transaction(transaction_id)
+            for transaction_hash in last_block.transaction_ids:
+                self.logger.debug(
+                    f'Fetching transaction {transaction_hash}')
+                try:
+                    transaction = self._fetch_transaction(transaction_hash)
+                except TransactionCouldNotFetch:
+                    self.logger.error(
+                        'Could not fetch transaction %s.', transaction_hash)
+                    continue
                 address = transaction.to
                 if self._is_nft(address):
                     try:
                         token_id = self._fetch_nft_id_from_transaction(
-                            transaction.hash)
+                            transaction_hash)
                         token_url = self._fetch_nft_url(address, token_id)
                         nft = NFT(token_url, token_id,
-                                  address, transaction.hash)
+                                  address, transaction_hash)
                         nfts.append(nft)
+                        self.logger.info(
+                            'Transaction %s is a mint transaction for ERC-721 Contract %s',
+                            transaction_hash,
+                            address)
                         if callback is not None:
                             callback(nft)
-                    except InvalidMintTransactionException:
+                    except (InvalidMintTransactionException, CouldNotFetchNFTURL):
                         # Easier than actuall checking.
                         continue
             block_count += 1

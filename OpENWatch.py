@@ -15,6 +15,7 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 from argparse import ArgumentParser
+from logging import getLogger
 
 from openwatch import EthereumNFTWatcher
 from openwatch.blockchain_classes import NFT
@@ -22,11 +23,11 @@ from openwatch.blockchain_classes import NFT
 
 def callback(nft: NFT):
     print(
-        f'Minted NFT hosted in {nft.token_url} by transaction {nft.minting_transaction_hash}')
+        f'Found NFT, hosted in {nft.token_url} minted by transaction {nft.minting_transaction_hash}')
 
 
-def run_watcher(host: str, port: int) -> None:
-    watcher = EthereumNFTWatcher(host, str(port))
+def run_watcher(host: str, port: int, log_level: int) -> None:
+    watcher = EthereumNFTWatcher(host, str(port), log_level)
     watcher.fetch_nfts_until_block(limit=10, callback=callback)
 
 
@@ -36,5 +37,8 @@ if __name__ == '__main__':
                         help='Host address of the Ethereum Node.')
     parser.add_argument('--port', '-p', default=8545,
                         help='Port to the Ethereum Node\'s HTTP JSON RPC Server.')
+    parser.add_argument('--log_level', '-l', default=40,
+                        help='Log level issued to logger, compliant with Python.',
+                        type=int)
     args = parser.parse_args()
-    run_watcher(args.host, args.port)
+    run_watcher(args.host, args.port, args.log_level)
