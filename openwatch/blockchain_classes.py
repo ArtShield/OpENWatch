@@ -57,3 +57,14 @@ class Block:
         :param block: Previous block object of this block.
         """
         self.parent_block = block
+
+
+@dataclass
+class NFT:
+    """
+    A Non-Fungiable Token "on" the blockchain
+    """
+    token_url: str
+    token_id: int
+    issuing_contract_address: str
+    minting_transaction_hash: str
