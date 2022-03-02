@@ -7,6 +7,15 @@ services:
       - openwatch_ethereum_persist:/ethereum:rw
     ports:
       - '8545:8545'
+  
+  openwatch:
+    build: '.'
+    depends_on:
+      - geth
+    volumes:
+      - type: bind
+        source: ./output
+        target: /openwatch/output
 
 volumes:
   openwatch_ethereum_persist:

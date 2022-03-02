@@ -1,0 +1,2 @@
+pyOpENWatch==1.2.3
+requests==2.27.1
